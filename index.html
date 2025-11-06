@@ -7,12 +7,13 @@
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#0b1220; color:#eaeef5; margin:0; }
     #chat { max-width:780px; margin:32px auto; background:#111a2e; border-radius:16px; padding:16px; box-shadow:0 4px 20px rgba(0,0,0,.25); }
-    .msg { padding:10px 12px; margin:8px 0; border-radius:12px; max-width: 85%; line-height:1.35; white-space:pre-wrap }
+    .msg { padding:10px 12px; margin:8px 0; border-radius:12px; max-width: 85%; line-height:1.4; white-space:pre-wrap }
     .user { background:#2544ff; margin-left:auto }
     .bot  { background:#1a2440 }
     #row { display:flex; gap:8px; margin-top:12px }
     input[type=text]{ flex:1; padding:12px; border-radius:10px; border:1px solid #2a3558; background:#0e162b; color:#eaeef5 }
     button{ padding:12px 16px; border-radius:10px; border:0; background:#2544ff; color:white; cursor:pointer }
+    .choices { margin-top:6px }
     .choice { display:inline-block; background:#223057; padding:6px 10px; border-radius:8px; margin:6px 6px 0 0; cursor:pointer }
     .small { opacity:.8; font-size:.9em }
     a { color:#8fb3ff }
@@ -28,16 +29,17 @@
   </div>
 
 <script>
-// TODO: replace with your PRODUCTION n8n URLs (not test)
-const CLASSIFY_URL = "https://YOUR-RCLD-DOMAIN/webhook/classify";
-const ANSWER_URL   = "https://YOUR-RCLD-DOMAIN/webhook/answer";
+// === 1) PUT YOUR PRODUCTION n8n WEBHOOK URLS HERE ===
+const CLASSIFY_URL = "https://YOUR-RCLD-DOMAIN/webhook/classify";  // e.g. https://jr0f8l8t.rcld.app/webhook/classify
+const ANSWER_URL   = "https://YOUR-RCLD-DOMAIN/webhook/answer";    // e.g. https://jr0f8l8t.rcld.app/webhook/answer
+// ====================================================
 
 const log = document.getElementById('log');
 const input = document.getElementById('input');
 const sendBtn = document.getElementById('send');
 
-let session = null;
-let stage   = 'await_hts6';
+let session = null;         // holds id, hts6, answers, lastQid, description (from server)
+let stage   = 'await_hts6'; // await_hts6 → confirm_hts6 → ask → done
 let currentQid = null;
 
 function add(text, who='bot', html=false){
@@ -47,8 +49,11 @@ function add(text, who='bot', html=false){
   log.appendChild(div);
   log.scrollTop = log.scrollHeight;
 }
+
+// render buttons for choices
 function addChoices(choices){
   const wrap = document.createElement('div');
+  wrap.className = 'choices';
   (choices || []).forEach(c=>{
     const span = document.createElement('span');
     span.className = 'choice';
@@ -61,9 +66,13 @@ function addChoices(choices){
   log.scrollTop = log.scrollHeight;
 }
 
+// POST helper
 async function call(url, body){
   const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) {
+    const t = await r.text().catch(()=>r.statusText);
+    throw new Error(`HTTP ${r.status}: ${t}`);
+  }
   return r.json();
 }
 
@@ -74,15 +83,17 @@ async function handleSend(){
 
   try {
     if (stage === 'await_hts6') {
+      // allow: "940161", or "940161 upholstered wood chair"
       const m = text.match(/(\d{6})(?:\s+(.+))?/);
       if (!m){ add("Please send a 6-digit HTS (e.g., 940161) and optional description, e.g.:\n940161 upholstered wood chair", 'bot'); return; }
       const hts6 = m[1];
       const description = m[2] || '';
       const res = await call(CLASSIFY_URL, { hts6, description });
+      // expected: { hts6, explanation, choices:[{id,label}...], session:{...} }
       session = res.session;
       stage = 'confirm_hts6';
       add(`Confirm 6-digit ${res.hts6}\n${res.explanation}`, 'bot');
-      addChoices(res.choices);
+      addChoices(res.choices); // usually Yes / No
       return;
     }
 
@@ -104,6 +115,7 @@ async function handleChoice(answerId){
   add(answerId, 'user');
   try {
     if (stage === 'confirm_hts6') {
+      // first /answer call: qid=null
       const res = await call(ANSWER_URL, { session, qid: null, answerId });
       if (res.stage === 'triage'){ add(res.message, 'bot'); return; }
       if (res.stage === 'ask'){
@@ -130,7 +142,8 @@ async function handleChoice(answerId){
         return;
       }
       if (res.stage === 'unresolved'){
-        add("I need one more rule row for this combination. Please add it in the Google Sheet (rules tab).", 'bot');
+        add("I need one more rule row for this combination. Please add it in your Google Sheet rules tab.", 'bot');
+        // reset
         stage = 'await_hts6';
         session = null;
         add("You can start again by sending a new 6-digit HTS.", 'bot');
@@ -142,12 +155,11 @@ async function handleChoice(answerId){
   }
 }
 
-// greeting
-add("Hi! Send your 6-digit HTS (e.g., 940161) and optional description, like:\n`940161 upholstered wood chair`");
+// greet
+add("👋 Send your 6-digit HTS (e.g., 940161) and optional description, like:\n`940161 upholstered wood chair`");
 
 sendBtn.onclick = handleSend;
 input.addEventListener('keydown', e => { if (e.key === 'Enter') handleSend(); });
 </script>
 </body>
 </html>
-
